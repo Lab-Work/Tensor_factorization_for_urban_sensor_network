@@ -1,0 +1,372 @@
+% This code tests traffic pace/speed data 2010 in small size (28 links)
+%% load data
+addpath PROPACK/tensor_toolbox-master
+addpath ..
+
+clear variables;
+load('../Data/AoT6M_277wn.mat')
+load('../Data/Noaa_6M.mat');
+
+% construct observation matrix into tensor fromat
+nl = size(Obs2,1);        % #links
+nm = 24 ;         % #hours in a day
+nd = size(Obs2,2)/nm;     % #days
+
+% 
+% % index for missing entries
+Sigma_bar = isnan(Obs2);
+Sigma_bar = tensor(Sigma_bar,[nl nm nd]);
+
+% fold tensor
+D = Obs2;
+D(isnan(D)) = 0;
+D = tensor(D,[nl nm nd]);
+Size = numel(double(D));
+outlier_dim = 2;
+
+% percent. missing entries
+missing_rate = sum(sum(isnan(Obs2))) / Size;
+
+% examine missing fibers 
+% temp = sum(double(Sigma_bar), 2);
+% sum(sum(temp > 12))
+%% plot obs
+figure();
+for i = 1: size(Obs2, 1) 
+    plot(Obs2(i,:));
+    hold on
+end
+
+% ylim([-20 70])
+title("all observations");
+xlabel('hour count')
+ylabel('temperature (C)')
+
+%% RPCA21
+% define optimazation parameter
+lambda = 1/sqrt(log(4392))*0.4 ;
+lambda1 = 1/sqrt(4392);
+fprintf('lambda=%1.4f\n',lambda);
+
+%rpca
+tic;
+[Lhat,Shat,iter] = inexact_alm_rmc21(D,Sigma_bar, lambda, 1e-7, 1000, outlier_dim);
+time = toc;
+
+%% examing results
+% spar of outlier sonsor*day
+tol = 10;
+ind = any(abs(double(Shat)) > tol, 2);
+totle_fib = numel(ind);
+Spar_fiber = sum(sum(sum(ind)))/totle_fib;  % percentage of non-zero elements in S
+disp(['Threshhold:', num2str(tol), ',   Estimated fiber-wise Sparcity: ', num2str(Spar_fiber)])
+
+% plot sparsity curve
+ni = 25;
+tols = linspace(0.1,9,ni);
+fiber_spars = zeros(1,ni);
+for i = 1:ni
+    toli = tols(i);
+    ind = any(abs(double(Shat)) > toli, 2);
+    fiber_spars(i) = sum(sum(sum(ind)))/totle_fib;
+end
+figure()
+plot(tols, fiber_spars)
+xlabel('abs value thresh hold')
+ylabel('fiber-wise sparsity')
+%% pearson corr
+Lhat_mat = double(tenmat(Lhat,1));
+Shat_mat = double(tenmat(Shat,1));
+
+% outsensors_raw = Obs2(any(abs(Shat_mat) > 10, 2), :);
+ind3D = tensor(~repmat(ind, 1,24,1));
+ind3D = double(tenmat(ind3D,1));
+ind3D = logical(ind3D);
+outliers_raw = Obs2;
+outliers_raw(ind3D) = nan;
+
+R_recover = row_corrcoef(Lhat_mat, NOAA);
+R_raw_out = row_corrcoef(outliers_raw, NOAA);
+R_raw = row_corrcoef(Obs2, NOAA);
+impr = R_recover - R_raw;
+max(impr)
+%% calculate relative error: not impute nan 
+t = size(NOAA,2);
+NOAA_centered = NOAA - mean(NOAA);
+
+mean_obs = nanmean(Obs2,2);
+Obs_centered = Obs2 - mean_obs;
+count_notnan = sum(~isnan(Obs_centered),2);
+diff = Obs_centered - NOAA_centered;
+diff(isnan(diff)) = 0;
+MSE_obs_missing = sum( vecnorm(diff, 2, 2))/nl / sqrt(t) ;
+
+
+Lhat_centered = Lhat_mat - nanmean(Lhat_mat, 2);
+Lhat_centered(isnan(Lhat_centered)) = 0;
+% MSE_Lhat = norm(Lhat_centered - NOAA_centered, 'fro')/ base_norm;
+MSE2_Lhat = sum( vecnorm(Lhat_centered - NOAA_centered, 2, 2))/sqrt(Size) ;
+MSE_Lhat = sum(vecnorm(Lhat_centered - NOAA_centered, 2, 2)) /nl / sqrt(t);
+
+%% calculate relative error: impute nan w/ mean
+NOAA_centered = NOAA - mean(NOAA);
+% base_norm = sqrt(i * norm(NOAA_centered, 'fro')^2);
+
+mean_obs = nanmean(Obs2,2);
+Obs_centered = Obs2 - mean_obs;
+count_notnan = sum(~isnan(Obs_centered),2);
+Obs_centered(isnan(Obs_centered)) = 0;
+% MSE_Obs = norm(Obs_centered - NOAA_centered, 'fro') / base_norm;
+MSE2_obs = sum( vecnorm(Obs_centered - NOAA_centered, 2, 2))/ sqrt(Size) ;
+MSE_obs = sum( vecnorm(Obs_centered - NOAA_centered, 2, 2))/nl / sqrt(t) ;
+
+Lhat_centered = Lhat_mat - nanmean(Lhat_mat, 2);
+Lhat_centered(isnan(Lhat_centered)) = 0;
+% MSE_Lhat = norm(Lhat_centered - NOAA_centered, 'fro')/ base_norm;
+MSE2_Lhat = sum( vecnorm(Lhat_centered - NOAA_centered, 2, 2))/sqrt(Size) ;
+MSE_Lhat = sum(vecnorm(Lhat_centered - NOAA_centered, 2, 2)) /nl / sqrt(t);
+
+
+%% 0 to nan for estimation
+col_E = tenmat(Shat,outlier_dim);
+col_E = any(double(col_E) ~= 0);  %find index all nonzero fibers of outlier
+col_X = tenmat(Lhat,outlier_dim);
+col_X = all(double(col_X) ==0);
+
+Shat_obs = tenmat(Shat,outlier_dim);
+Lhat_obs = tenmat(Lhat,outlier_dim);
+Lhat_obs(:,col_X) = nan;
+Shat_obs(:,~col_E) = nan;
+
+Lhat = tensor(Lhat_obs);
+Shat = tensor(Shat_obs);
+
+
+%% plot all data in subplots 
+% convert to marix for plot
+Lhat_mat = double(tenmat(Lhat,1));
+Shat_mat = double(tenmat(Shat,1));
+
+figure()
+for i = 1: size(Lhat_mat, 1)
+   subplot(3,1,3)
+   plot(Shat_mat(i, :))
+   hold on
+   subplot(3,1,2)
+   plot(Lhat_mat(i, :))
+   hold on
+   subplot(3,1,1)
+   plot(Obs2(i, :))
+   hold on
+end
+subplot(3,1,3)
+title("all sensors over 6 month: noises");
+xlabel('hour count')
+ylabel('temperature (C)')
+hold off
+
+subplot(3,1,2)
+plot(NOAA, 'k','LineWidth',2);
+title("all sensors over 6 month: predicted");
+xlabel('hour count')
+ylabel('temperature (C)')
+hold off 
+
+subplot(3,1,1)
+title("all sensors over 6 month: observation");
+xlabel('hour count')
+ylabel('temperature (C)')
+
+hold off
+
+%% examine missing data
+missing_sensor = sum(isnan(Obs2),2) > 400;
+missing_index = find(missing_sensor);
+total = length(missing_index);
+
+figure()
+for i = 12:14
+    ind = missing_index(i);
+    subplot(3,1,1)
+    plot(Obs2(ind,:));
+%     ylim([-15 50]);
+    hold on
+    subplot(3,1,2)
+    plot(Lhat_mat(ind, :));
+    hold on
+    subplot(3,1,3)
+    plot(Shat_mat(ind, :));
+    hold on
+end
+
+subplot(3,1,3)
+title("missing sensors over 6 month: noises");
+xlabel('hour count')
+ylabel('temperature (C)')
+
+subplot(3,1,2)
+plot(NOAA, 'k','LineWidth',2);
+title("missing sensors over 6 month: predicted");
+xlabel('hour count')
+ylabel('temperature (C)')
+hold off 
+
+subplot(3,1,1)
+title("missing sensors over 6 month: observation");
+xlabel('hour count')
+ylabel('temperature (C)')
+hold off
+
+
+%% l21 norm outlier examine
+
+% convert to marix for plot
+Lhat_mat = double(tenmat(Lhat,1));
+Shat_mat = double(tenmat(Shat,1));
+
+sensor_ano = any(abs(Shat_mat) > 15, 2);
+ano_index = find(sensor_ano);
+
+figure()
+for i = 1:10
+   subplot(3,1,3)
+   plot(Shat_mat(ano_index(i), :),'DisplayName',num2str(i))
+   hold on
+   subplot(3,1,2)
+   plot(Lhat_mat(ano_index(i), :))
+   hold on
+   subplot(3,1,1)
+   plot(Obs2(ano_index(i), :))
+   hold on
+end
+subplot(3,1,3)
+title("selected bad sensors over 6 month: noises");
+xlabel('hour count')
+ylabel('temperature (C)')
+legend show
+
+subplot(3,1,2)
+plot(NOAA, 'k','LineWidth',1.5);
+title("selected bad sensors over 6 month: recovered");
+xlabel('hour count')
+ylabel('temperature (C)')
+hold off 
+
+subplot(3,1,1)
+title("selected bad sensors over 6 month: observation");
+xlabel('hour count')
+ylabel('temperature (C)')
+hold off
+
+%% plot all data in subplots
+% convert to marix for plot
+Lhat_mat = double(tenmat(Lhat,1));
+Shat_mat = double(tenmat(Shat,1));
+Shat1_mat = double(tenmat(Shat1,1));
+
+figure()
+for i = 1: size(Lhat_mat, 1)
+   subplot(4,1,3)
+   plot(Shat_mat(i, :))
+   hold on
+   subplot(4,1,2)
+   plot(Lhat_mat(i, :))
+   hold on
+   subplot(4,1,1)
+   plot(Obs2(i, :))
+   hold on
+   subplot(4,1,4)
+   plot(Shat1_mat(i, :))
+   hold on
+end
+subplot(4,1,3)
+title("all sensors over 6 month: outliers");
+% xlabel('hour count')
+ylabel('temperature (C)')
+hold off
+
+subplot(4,1,2)
+plot(NOAA, 'k','LineWidth',2);
+title("all sensors over 6 month: predicted");
+% xlabel('hour count')
+ylabel('temperature (C)')
+hold off
+ 
+subplot(4,1,1)
+title("all sensors over 6 month: observation");
+% xlabel('hour count')
+ylabel('temperature (C)')
+hold off
+
+subplot(4,1,4)
+title("all sensors over 6 month: noises");
+xlabel('hour count')
+ylabel('temperature (C)')
+hold off
+
+%% exam outlier sensors
+
+% convert to marix for plot
+Lhat_mat = double(tenmat(Lhat,1));
+Shat_mat = double(tenmat(Shat,1));
+Shat1_mat = double(tenmat(Shat1,1));
+
+sensor_ano = any(abs(Shat_mat) > 15, 2);
+ano_index = find(sensor_ano);
+
+figure(1)
+for i = 10:15
+   subplot(4,1,3)
+   plot(Shat_mat(ano_index(i), :))
+   hold on
+   subplot(4,1,2)
+   plot(Lhat_mat(ano_index(i), :))
+   hold on
+   subplot(4,1,1)
+   plot(Obs2(ano_index(i), :))
+   hold on
+   subplot(4,1,4)
+   plot(Shat1_mat(ano_index(i), :))
+   hold on
+end
+subplot(4,1,3)
+title("selected bad sensors over 6 month: outliers");
+xlabel('hour count')
+ylabel('temperature (C)')
+hold off
+
+subplot(4,1,2)
+plot(NOAA, 'k','LineWidth',1.5);
+title("selected bad sensors over 6 month: predicted");
+xlabel('hour count')
+ylabel('temperature (C)')
+hold off
+
+subplot(4,1,1)
+title("selected bad sensors over 6 month: observation");
+xlabel('hour count')
+ylabel('temperature (C)')
+hold off
+
+subplot(4,1,4)
+title("selected bad sensors over 6 month: noises");
+xlabel('hour count')
+ylabel('temperature (C)')
+
+hold off
+
+%% function
+function R = row_corrcoef(mat1, noaa)
+nl = size(mat1, 1);
+R = zeros(nl,1);
+for i = 1: nl  
+    index = ~isnan(mat1(i,:)) & ~isnan(noaa);
+    coef = corrcoef(mat1(i,index), noaa(index));
+    if isnan(coef)
+        R(i) = nan;
+    else
+    R(i) = coef(2,1);
+    end
+end
+end
+
