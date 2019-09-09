@@ -4,7 +4,7 @@ addpath PROPACK/tensor_toolbox-master
 addpath ..
 
 clear variables;
-load('../Data/AoT6M_277wn.mat')
+load('../Data/AoT6M_277.mat')
 load('../Data/Noaa_6M.mat');
 
 % construct observation matrix into tensor fromat
